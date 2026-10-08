@@ -1,9 +1,12 @@
 # ADR-003 — Retry com backoff exponencial (1m/5m/30m/2h/12h) e DLQ em tabela separada
 
-- **Status:** Aceito
 - **Data da decisão:** reunião técnica de quinta-feira, 09:00. Retry fechado às [09:17] por Larissa; DLQ e replay às [09:18]–[09:19]; role ADMIN às [09:36].
 - **Decisores:** Larissa, Diego, Bruno, Sofia (replay ADMIN); Marcos aceitou a janela
 - **Relacionados:** [ADR-002](ADR-002-worker-separado-em-polling.md), [ADR-005](ADR-005-at-least-once-com-x-event-id.md), [ADR-006](ADR-006-reuso-dos-padroes-do-projeto.md)
+
+## Status
+
+Aceito. A contagem exata de envios ainda precisa de confirmação ([RFC-OQ-06](../RFC.md#5-questões-em-aberto)).
 
 ## Contexto
 
@@ -12,7 +15,7 @@ O endpoint do cliente pode estar fora do ar ou lento. Já houve cliente com duas
 ## Decisão
 
 - `ADR-003-D1`: **backoff exponencial com teto de 5 tentativas**. Os intervalos são **1 min, 5 min, 30 min, 2 h e 12 h** ([09:15] Diego, [09:17] Diego, [09:17] Larissa).
-  - **Como lemos a contagem:** o envio inicial é seguido de 5 retentativas, uma após cada intervalo. É a única leitura em que os cinco intervalos citados somam a janela de "quase 15 horas entre primeira falha e última tentativa" ([09:17] Diego): 1 + 5 + 30 + 120 + 720 min = 14 h 36 min. Como a fala "5 tentativas" admite outra leitura, a confirmação está pedida no [RFC](../RFC.md#questões-em-aberto).
+  - **Como lemos a contagem:** o envio inicial é seguido de 5 retentativas, uma após cada intervalo. Essa leitura faz os cinco intervalos citados somarem a janela de "quase 15 horas entre primeira falha e última tentativa" ([09:17] Diego): 1 + 5 + 30 + 120 + 720 min = 14 h 36 min. Há uma evidência a favor da outra leitura, de 5 envios no total: o resumo final diz "total 5 tentativas" ([09:48] Larissa). Nesse caso só os quatro primeiros intervalos seriam usados (~2 h 36 min). A confirmação está pedida no [RFC](../RFC.md#5-questões-em-aberto) (`RFC-OQ-06`).
 - `ADR-003-D2`: esgotadas as retentativas, o evento vira **falha permanente**. Ele é copiado para a tabela separada **`webhook_dead_letter`** com payload, motivo da falha e timestamp ([09:18] Diego). A linha da outbox fica com status terminal `FAILED`.
 - `ADR-003-D3`: o **reprocessamento é manual**, pelo endpoint `POST /admin/webhooks/dead-letter/:id/replay`. Ele recoloca o evento na outbox como pendente ([09:18] Diego, [09:35] Diego). No código, o endpoint fica sob o prefixo `/api/v1` (`src/app.ts`).
 - `ADR-003-D4`: o replay **exige a role `ADMIN`**, verificada pelo `requireRole` que já existe em `src/middlewares/auth.middleware.ts` ([09:36] Sofia, [09:36] Larissa). O replay **registra quem o executou**, para auditoria ([09:36] Sofia).

@@ -1,9 +1,12 @@
 # ADR-005 — Garantia de entrega at-least-once com deduplicação pelo `X-Event-Id`
 
-- **Status:** Aceito
 - **Data da decisão:** reunião técnica de quinta-feira, 09:00 (fechada às [09:26] por Larissa)
 - **Decisores:** Diego, Larissa; Sofia levantou a ressalva; Marcos fica com a comunicação aos clientes
 - **Relacionados:** [ADR-001](ADR-001-outbox-no-mysql.md), [ADR-003](ADR-003-retry-backoff-exponencial-e-dlq.md)
+
+## Status
+
+Aceito
 
 ## Contexto
 

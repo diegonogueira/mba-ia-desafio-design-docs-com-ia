@@ -1,9 +1,12 @@
 # ADR-001 — Padrão Outbox no MySQL existente
 
-- **Status:** Aceito
 - **Data da decisão:** reunião técnica de quinta-feira, 09:00 (fechada às [09:08] por Larissa)
 - **Decisores:** Larissa (Tech Lead), Diego (Plataforma), Bruno (Pedidos)
 - **Relacionados:** [ADR-002](ADR-002-worker-separado-em-polling.md), [ADR-005](ADR-005-at-least-once-com-x-event-id.md), [ADR-007](ADR-007-snapshot-do-payload-e-filtro-na-insercao.md)
+
+## Status
+
+Aceito
 
 ## Contexto
 
@@ -20,7 +23,7 @@ O time é pequeno e não quer subir infraestrutura nova ([09:07] Larissa, [09:07
 
 Adotamos o **padrão Transactional Outbox no MySQL que já existe**:
 
-- `ADR-001-D1`: dentro da **mesma transação** de `changeStatus`, insere-se uma linha na tabela nova `webhook_outbox` para cada endpoint interessado no evento ([09:06] Diego).
+- `ADR-001-D1`: dentro da **mesma transação** de `changeStatus`, o evento é inserido na tabela nova `webhook_outbox` ([09:06] Diego). Como o filtro de status é por endpoint e aplicado na inserção ([09:34] Bruno), este pacote grava uma linha por endpoint interessado (ver [ADR-007](ADR-007-snapshot-do-payload-e-filtro-na-insercao.md)). Essa escolha é uma derivação do filtro, não algo dito na reunião.
 - `ADR-001-D2`: se a inserção na outbox falhar, a transação inteira faz rollback e o status não muda ([09:40] Bruno, [09:41] Diego).
 - `ADR-001-D3`: a outbox tem índices em `status` e em `created_at` ([09:08] Diego). Os status são pendente, processando, falhou e entregue: `PENDING`, `PROCESSING`, `FAILED`, `DELIVERED`.
 - `ADR-001-D4`: o id da linha é UUID, como no resto do schema (`prisma/schema.prisma`, [09:51] Larissa).
@@ -31,7 +34,7 @@ Adotamos o **padrão Transactional Outbox no MySQL que já existe**:
 | ID | Alternativa | Por que foi descartada |
 |---|---|---|
 | `ADR-001-ALT-01` | **Disparo HTTP síncrono dentro de `changeStatus`** ([09:03] Larissa) | A transação já é pesada. Um cliente lento seguraria a transação e travaria as mudanças de status de outros pedidos ([09:04] Bruno). Se o cliente estiver fora do ar, não faz sentido dar rollback na mudança de status ([09:04] Bruno). "Síncrono está fora de questão" ([09:06] Diego). |
-| `ADR-001-ALT-02` | **Redis Streams / fila externa** ([09:07] Larissa) | Exigiria subir e operar infraestrutura nova. Redis Cluster para isso seria overengineering para um time pequeno ([09:07] Diego). Também não resolve sozinho a atomicidade com a transação do MySQL. |
+| `ADR-001-ALT-02` | **Redis Streams / fila externa** ([09:07] Larissa) | Exigiria subir e operar infraestrutura nova. Redis Cluster para isso seria overengineering para um time pequeno ([09:07] Diego). Argumento adicional, que não foi discutido na reunião: sozinho, isso não resolve a atomicidade com a transação do MySQL. |
 
 ## Consequências
 

@@ -1,9 +1,12 @@
 # ADR-007 — Payload gravado como snapshot e filtro de eventos aplicado na inserção da outbox
 
-- **Status:** Aceito
 - **Data da decisão:** reunião técnica de quinta-feira, 09:00. Filtro fechado às [09:34] por Bruno e Diego; snapshot às [09:52] por Larissa, Diego e Bruno, depois da saída de Marcos e Sofia.
 - **Decisores:** Bruno, Diego, Larissa; Marcos definiu o filtro por status
 - **Relacionados:** [ADR-001](ADR-001-outbox-no-mysql.md), [ADR-005](ADR-005-at-least-once-com-x-event-id.md)
+
+## Status
+
+Aceito
 
 ## Contexto
 
@@ -16,7 +19,7 @@ Cada endpoint escolhe quais status de pedido quer receber. O exemplo dado foi "s
 
 - `ADR-007-D1`: **o filtro é aplicado na inserção.** `publishWebhookEvent` consulta os endpoints **ativos** do customer do pedido cuja lista de status inclui o `to_status`. Grava uma linha na outbox para cada endpoint que casa. Se nenhum endpoint casa, nada é inserido ([09:34] Bruno, [09:34] Diego).
 - `ADR-007-D2`: **o payload é gravado já renderizado (snapshot)** no momento da inserção. O evento reflete o estado do pedido quando o status mudou, mesmo que o pedido mude depois ([09:52] Larissa, [09:52] Diego, [09:52] Bruno).
-- `ADR-007-D3`: o payload é **enxuto**. Traz `event_id`, `event_type` (`order.status_changed`), `timestamp` ISO 8601, `order_id`, `order_number`, `from_status`, `to_status`, `customer_id` e campos básicos do pedido, como `total_cents`. **Não traz `items`**. Quem quiser detalhes consulta `GET /orders/:id` ([09:43] Diego, [09:44] Bruno). No código, essa rota é `GET /api/v1/orders/:id` (`src/modules/orders/order.routes.ts`).
+- `ADR-007-D3`: o payload é **enxuto**. Tem só a identificação do evento, do pedido e da transição, mais campos básicos como o total. **Não traz `items`**. Quem quiser detalhes consulta `GET /orders/:id` ([09:43] Diego, [09:44] Bruno). O contrato campo a campo está no [FDD §6.8](../FDD.md#68-fdd-contrato-08--chamada-de-saída-para-o-cliente-o-webhook-em-si). No código, essa rota é `GET /api/v1/orders/:id` (`src/modules/orders/order.routes.ts`).
 
 ## Alternativas Consideradas
 

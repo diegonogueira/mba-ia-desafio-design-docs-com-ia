@@ -23,8 +23,8 @@ O Order Management System (OMS) gerencia pedidos com uma máquina de estados: PE
 
 | Público | Papel | Cenário |
 |---|---|---|
-| Clientes B2B integrados (Atlas, MaxDistribuição, Nova Cargo) | Recebem as notificações | `PRD-CEN-01`: a Atlas quer saber só quando o pedido vira SHIPPED ou DELIVERED. Ela cadastra um endpoint com esse filtro e para de fazer polling ([09:33] Marcos). |
-| Usuários do OMS que representam o cliente | Configuram webhooks pela API, autenticados com JWT ([09:32] Marcos) | `PRD-CEN-02`: cadastra a URL, guarda a secret devolvida e consulta o histórico de entregas quando o cliente reclama de um aviso que não chegou ([09:34] Marcos). |
+| Clientes B2B integrados (Atlas, MaxDistribuição, Nova Cargo) | Recebem as notificações | `PRD-CEN-01`: um cliente quer saber só quando o pedido vira SHIPPED ou DELIVERED (exemplo dado na reunião). Ele cadastra um endpoint com esse filtro e para de fazer polling em `GET /orders` ([09:33] Marcos, [09:00] Marcos). |
+| Usuários do OMS que representam o cliente | Configuram webhooks pela API, autenticados com JWT ([09:32] Marcos) | `PRD-CEN-02`: cadastra a URL, guarda a secret devolvida e consulta o histórico das últimas entregas, com sucesso ou falha, payload, resposta e tempo de resposta ([09:31] Marcos, [09:34] Marcos). |
 | Administradores (role ADMIN) | Operação | `PRD-CEN-03`: depois que o endpoint do cliente volta de uma indisponibilidade longa, o ADMIN reprocessa os eventos que foram para a fila de falhas ([09:18] Diego, [09:36] Sofia). |
 | Cliente com várias integrações | Recebe por mais de um endpoint | `PRD-CEN-04`: identifica qual cadastro originou cada chamada pelo `X-Webhook-Id` ([09:44] Sofia). |
 | Cliente cuja secret vazou | Segurança | `PRD-CEN-05`: pede uma nova secret e tem 24 h para trocar nos sistemas dele sem perder notificações ([09:21] Sofia, [09:22] Diego). |
@@ -34,10 +34,10 @@ O Order Management System (OMS) gerencia pedidos com uma máquina de estados: PE
 | ID | Objetivo | Métrica | Meta |
 |---|---|---|---|
 | `PRD-MET-01` | Notificação percebida como "tempo real" | Tempo entre o commit da mudança de status e a primeira tentativa de entrega | **< 10 s** para endpoints saudáveis. O polling contribui com no máximo 2 s ([09:02] Marcos, [09:10] Larissa). |
-| `PRD-MET-02` | Reter os clientes que pediram a feature | Clientes B2B solicitantes integrados recebendo webhooks | **3 de 3** até o fim de novembro ([09:00] Marcos, [09:45] Marcos) |
+| `PRD-MET-02` | Reter os clientes que pediram a feature | Clientes B2B solicitantes integrados recebendo webhooks | **3 de 3** até o fim de novembro. Meta proposta por este PRD a partir do pedido dos três clientes ([09:00] Marcos) e do prazo da Atlas ([09:45] Marcos). |
 | `PRD-MET-03` | Nenhuma mudança de status sem notificação | Mudanças de status com endpoint interessado e sem evento na outbox | **0** (garantia transacional, [09:40] Bruno) |
 | `PRD-MET-04` | Nenhuma notificação perdida em silêncio | Eventos que não terminam entregues nem na fila de falhas | **0**. Todo evento termina entregue ou na DLQ com motivo ([09:15] Diego, [09:18] Diego). |
-| `PRD-MET-05` | Tolerar indisponibilidade do cliente | Janela coberta pelas retentativas antes de declarar falha | **~14,6 h** (1m + 5m + 30m + 2h + 12h; [09:17] Diego, [09:17] Marcos) |
+| `PRD-MET-05` | Tolerar indisponibilidade do cliente | Janela coberta pelas retentativas antes de declarar falha | **~14,6 h** (1m + 5m + 30m + 2h + 12h; [09:17] Diego, [09:17] Marcos). Leitura de 1 envio + 5 retentativas, a confirmar (RFC-OQ-06). |
 
 ## 5. Escopo
 
@@ -71,13 +71,13 @@ O Order Management System (OMS) gerencia pedidos com uma máquina de estados: PE
 | `PRD-FR-03` | O sistema deve permitir **listar** os webhooks de um customer, **editar** e **remover** um webhook. | [09:33] Bruno |
 | `PRD-FR-04` | Cada endpoint deve ter um **filtro de eventos**: a lista de status de pedido que quer receber. O sistema só notifica os status da lista. | [09:33] Marcos, [09:34] Bruno |
 | `PRD-FR-05` | Toda **mudança de status** de pedido deve gerar uma notificação para cada endpoint ativo do customer interessado naquele status. | [09:00] Marcos, [09:40] Bruno |
-| `PRD-FR-06` | A notificação deve ser um JSON com identificador do evento, tipo `order.status_changed`, data e hora ISO 8601, id e número do pedido, status anterior e novo, customer e campos básicos como o total. Deve refletir o pedido **no momento da mudança**. | [09:43] Diego, [09:52] Larissa |
-| `PRD-FR-07` | Cada notificação deve ser **assinada com HMAC-SHA256** e levar os headers `X-Event-Id`, `X-Signature`, `X-Timestamp`, `X-Webhook-Id` e `Content-Type: application/json`. | [09:20] Sofia, [09:44] Diego, [09:44] Sofia |
+| `PRD-FR-06` | A notificação deve identificar o evento, o pedido, o customer e a transição (status anterior e novo), com data e hora e campos básicos como o total, sem os itens. Deve refletir o pedido **no momento da mudança**. O contrato exato está no FDD. | [09:43] Diego, [09:52] Larissa |
+| `PRD-FR-07` | Cada notificação deve ser **assinada com HMAC-SHA256** e trazer em headers a identificação do evento (`X-Event-Id`), do endpoint de origem (`X-Webhook-Id`), a assinatura (`X-Signature`) e o horário do envio (`X-Timestamp`). | [09:20] Sofia, [09:44] Diego, [09:44] Sofia |
 | `PRD-FR-08` | O cliente deve poder **pedir uma nova secret** pela API. A anterior continua válida por **24 h**. | [09:21] Sofia |
 | `PRD-FR-09` | Falhas de entrega devem ser **retentadas automaticamente** com intervalos crescentes (1m, 5m, 30m, 2h, 12h). | [09:15] Diego, [09:17] Larissa |
 | `PRD-FR-10` | Esgotadas as retentativas, o evento deve ir para uma **fila de falhas (DLQ)** com payload, motivo e data. | [09:18] Diego |
 | `PRD-FR-11` | Um **ADMIN** deve poder **reprocessar** um item da DLQ, e o sistema deve registrar quem reprocessou. | [09:18] Diego, [09:36] Sofia |
-| `PRD-FR-12` | O cliente deve poder consultar o **histórico de entregas** de um endpoint (sucesso ou falha, payload, resposta e tempo de resposta), com pelo menos as 100 últimas. | [09:34] Marcos |
+| `PRD-FR-12` | O cliente deve poder consultar o **histórico de entregas** de um endpoint (sucesso ou falha, payload, resposta e tempo de resposta), cobrindo as entregas mais recentes. O exemplo citado foi "os últimos 100". | [09:34] Marcos |
 | `PRD-FR-13` | URLs que não sejam **https** devem ser recusadas no cadastro com erro de validação. | [09:23] Sofia |
 
 ## 7. Requisitos não funcionais
@@ -103,7 +103,7 @@ O raciocínio completo de cada decisão está no ADR correspondente. Aqui fica s
 |---|---|---|
 | Outbox no MySQL, na mesma transação | Nenhuma mudança de status sem notificação. Em troca, a entrega deixa de ser instantânea. | [ADR-001](adrs/ADR-001-outbox-no-mysql.md) |
 | Worker separado com polling de 2 s | Atraso de até 2 s antes do envio, aceito pelo PM ([09:10] Marcos). Sem ordem global. | [ADR-002](adrs/ADR-002-worker-separado-em-polling.md) |
-| 5 retentativas em ~14,6 h, depois DLQ | Cobre indisponibilidades longas. Depois disso, o reprocessamento é manual. | [ADR-003](adrs/ADR-003-retry-backoff-exponencial-e-dlq.md) |
+| Retentativas em 1m/5m/30m/2h/12h, depois DLQ | Cobre indisponibilidades longas, de até ~14,6 h se forem 5 retentativas além do envio inicial. A contagem exata está pendente (RFC-OQ-06). Depois disso, o reprocessamento é manual. | [ADR-003](adrs/ADR-003-retry-backoff-exponencial-e-dlq.md) |
 | HMAC-SHA256 com secret por endpoint e rotação de 24 h | O cliente consegue validar a origem e trocar a secret sem parada. | [ADR-004](adrs/ADR-004-hmac-sha256-secret-por-endpoint.md) |
 | At-least-once com `X-Event-Id` | O cliente precisa deduplicar. Isso será destacado no portal ([09:26] Marcos). | [ADR-005](adrs/ADR-005-at-least-once-com-x-event-id.md) |
 | Reuso dos padrões do projeto | Menos risco e prazo menor. | [ADR-006](adrs/ADR-006-reuso-dos-padroes-do-projeto.md) |
@@ -114,7 +114,7 @@ O raciocínio completo de cada decisão está no ADR correspondente. Aqui fica s
 | ID | Dependência | Origem |
 |---|---|---|
 | `PRD-DEP-01` | **Revisão de segurança da Sofia**, com pelo menos 2 dias úteis reservados antes do deploy (HMAC e geração de secret) | [09:46] Sofia, [09:49] Sofia |
-| `PRD-DEP-02` | **Documentação no portal do desenvolvedor**, sob responsabilidade do PM: at-least-once, headers e como integrar | [09:26] Marcos, [09:40] Marcos |
+| `PRD-DEP-02` | **Documentação no portal do desenvolvedor**, sob responsabilidade do PM: semântica at-least-once e como integrar via API | [09:26] Marcos, [09:40] Marcos |
 | `PRD-DEP-03` | **Capacidade do time:** 3 sprints (outbox e DLQ: 1; worker e retry: 1; CRUD e histórico: ½; integração com pedidos e testes: ½; HMAC e validações: o restante) | [09:46] Larissa |
 | `PRD-DEP-04` | **Confirmação do prazo com a Atlas**, pelo PM | [09:47] Marcos |
 | `PRD-DEP-05` | **Novo processo em produção** (worker), no mesmo banco MySQL | [09:11] Diego |
@@ -123,11 +123,11 @@ O raciocínio completo de cada decisão está no ADR correspondente. Aqui fica s
 
 | ID | Risco | Probabilidade | Impacto | Mitigação |
 |---|---|---|---|---|
-| `PRD-RISK-01` | Atraso na entrega e **perda da Atlas** para o concorrente | Média | Alto | Escopo enxuto (email, dashboard e rate limiting fora). Estimativa de 3 sprints com a revisão de segurança incluída. Prazo confirmado com o cliente ([09:46] Larissa, [09:47] Marcos). |
+| `PRD-RISK-01` | Atraso na entrega e **perda da Atlas** para o concorrente | Média | Alto | Escopo enxuto (email, dashboard e rate limiting fora). Estimativa de 3 sprints com a revisão de segurança incluída. Prazo a confirmar com a Atlas pelo PM ([09:46] Larissa, [09:47] Marcos). |
 | `PRD-RISK-02` | Cliente **processar o mesmo evento duas vezes** por não deduplicar | Média | Médio | `X-Event-Id` estável e documentação em destaque no portal ([09:25] Sofia, [09:26] Marcos). |
 | `PRD-RISK-03` | **Vazamento de secret** de um cliente, como já aconteceu em log de aplicação dele | Baixa | Alto | Secret por endpoint, rotação com 24 h de carência e revisão de segurança ([09:21] Sofia, [09:22] Diego). |
 | `PRD-RISK-04` | **Rajada de notificações** para um cliente quando muitos pedidos mudam de uma vez | Média | Baixo | Monitorar. O rate limiting será decidido com dados ([09:38] Diego, [09:39] Larissa). |
-| `PRD-RISK-05` | Cliente receber **eventos do mesmo pedido fora de ordem** | Baixa | Médio | Limitação conhecida e documentada. O payload traz status anterior e novo para reconciliar ([09:13] Larissa). |
+| `PRD-RISK-05` | Cliente receber **eventos do mesmo pedido fora de ordem** | Baixa | Médio | Limitação conhecida e documentada ([09:13] Larissa). Mitigação proposta: o payload traz status anterior e novo, e o cliente reconcilia por eles. |
 | `PRD-RISK-06` | Indisponibilidade do cliente **maior que ~14,6 h** | Baixa | Médio | Os eventos ficam na DLQ e um ADMIN os reprocessa ([09:17] Marcos, [09:18] Diego). |
 
 ## 11. Critérios de aceitação
@@ -146,7 +146,7 @@ O raciocínio completo de cada decisão está no ADR correspondente. Aqui fica s
 
 ## 12. Estratégia de testes e validação
 
-- `PRD-TEST-01` **Testes de integração da API**, no padrão de `tests/orders.test.ts` (Vitest + Supertest sobre `buildApp`, banco MySQL real): CRUD, validações (https, filtro), autorização (OPERATOR × ADMIN no replay) e histórico.
+- `PRD-TEST-01` **Testes de integração da API**, no padrão dos testes existentes (`tests/orders.test.ts`): CRUD, validações (https, filtro), autorização (OPERATOR × ADMIN no replay) e histórico.
 - `PRD-TEST-02` **Testes de atomicidade:** mudança de status com e sem endpoint interessado, e falha forçada na publicação (o status precisa permanecer).
 - `PRD-TEST-03` **Testes do worker** contra um servidor HTTP local de teste: entrega com sucesso e verificação de assinatura, timeout de 10 s, backoff, DLQ, payload acima de 64 KB e replay.
 - `PRD-TEST-04` **Teste ponta a ponta** com API e worker rodando, previsto no plano da sprint ("integração no order.service e testes ponta a ponta", [09:46] Larissa).
