@@ -72,7 +72,7 @@ A solução tem cinco peças. Os detalhes de implementação (schemas, contratos
 | `RFC-OQ-05` | **Arquivamento das linhas entregues**, depois de cerca de 30 dias. | [09:08] Diego | Fora do escopo desta feature. |
 | `RFC-OQ-06` | **Contagem de tentativas.** Os cinco intervalos (1m/5m/30m/2h/12h) e a janela de "quase 15 horas" indicam 1 envio inicial + 5 retentativas. O resumo final diz "total 5 tentativas", o que indicaria 5 envios no total. | [09:17] Diego, [09:17] Larissa, [09:48] Larissa | O FDD adota 1 + 5 ([ADR-003](adrs/ADR-003-retry-backoff-exponencial-e-dlq.md)). Larissa precisa confirmar. |
 | `RFC-OQ-07` | **Ordem por pedido durante o retry.** Se um evento entra em backoff, o próximo evento do mesmo pedido pode ser entregue antes, mesmo com um único worker. | [09:12] Diego, [09:13] Larissa | Fica registrado como limitação ([ADR-002](adrs/ADR-002-worker-separado-em-polling.md)). Precisa decidir se vale bloquear por `order_id`. |
-| `RFC-OQ-08` | **Pontos para a revisão de segurança:** como guardar a secret em repouso (o HMAC exige o valor em claro) e se o `X-Timestamp` deve entrar na assinatura (hoje a assinatura cobre só o corpo). | [09:22] Sofia, [09:44] Diego, [09:46] Sofia | Revisão da Sofia antes do deploy. |
+| `RFC-OQ-08` | **Pontos para a revisão de segurança:** como guardar a secret em repouso (o HMAC exige o valor em claro) e se o `X-Timestamp` deve entrar na assinatura (hoje a assinatura cobre só o corpo). Também cabe à revisão decidir se uma nova rotação pode ser feita durante a carência, para o caso de a secret nova também vazar. | [09:22] Sofia, [09:44] Diego, [09:46] Sofia | Revisão da Sofia antes do deploy. |
 
 ## 6. Impacto e riscos
 
@@ -85,7 +85,7 @@ Riscos de negócio (prazo e churn da Atlas, deduplicação pelo cliente, vazamen
 | `RFC-RISK-01` | Transação de `changeStatus` mais longa, porque passa a consultar endpoints e inserir eventos | Baixa | Médio | Nenhuma chamada HTTP na transação. Só escrita local e indexada. |
 | `RFC-RISK-02` | Outbox crescendo sem arquivamento ([09:08] Diego) | Alta (no longo prazo) | Baixo | Índices adequados agora e arquivamento como trabalho futuro (`RFC-OQ-05`). |
 | `RFC-RISK-03` | Worker único como ponto único de vazão. Endpoints lentos atrasam outros clientes. | Média | Médio | Lote pequeno e alerta de atraso. A escala entra em `RFC-OQ-03`. |
-| `RFC-RISK-04` | Ordem por pedido não garantida durante o retry ([09:13] Larissa) | Média | Médio | Limitação documentada (`RFC-OQ-07`). O payload permite reconciliação. |
+| `RFC-RISK-04` | Ordem por pedido não garantida durante o retry. A reunião só limitou a ordem a `order_id` com worker único ([09:13] Larissa); o caso do retry não foi discutido. | Média | Médio | Limitação documentada (`RFC-OQ-07`). O payload permite reconciliação. |
 | `RFC-RISK-05` | Worker parado sem ninguém perceber. A API segue mudando status e os eventos acumulam. | Baixa | Alto | Os eventos ficam preservados na outbox. Alerta sobre a idade do evento pendente mais antigo. |
 
 ## 7. Decisões relacionadas

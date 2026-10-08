@@ -4,7 +4,7 @@
 |---|---|
 | **Product Manager** | Marcos |
 | **Tech Lead** | Larissa |
-| **Status** | Aprovado em reunião, implementação a iniciar |
+| **Status** | Requisitos aprovados em reunião; design técnico em revisão ([RFC](RFC.md)) |
 | **Data** | 2026-10-08 |
 | **Prazo-alvo** | fim de novembro, estimado em 3 sprints com revisão de segurança ([09:45] Marcos, [09:47] Larissa) |
 | **Documentos relacionados** | [RFC](RFC.md) · [FDD](FDD.md) · [ADRs](adrs/README.md) · [TRACKER](TRACKER.md) |
@@ -127,7 +127,7 @@ O raciocínio completo de cada decisão está no ADR correspondente. Aqui fica s
 | `PRD-RISK-02` | Cliente **processar o mesmo evento duas vezes** por não deduplicar | Média | Médio | `X-Event-Id` estável e documentação em destaque no portal ([09:25] Sofia, [09:26] Marcos). |
 | `PRD-RISK-03` | **Vazamento de secret** de um cliente, como já aconteceu em log de aplicação dele | Baixa | Alto | Secret por endpoint, rotação com 24 h de carência e revisão de segurança ([09:21] Sofia, [09:22] Diego). |
 | `PRD-RISK-04` | **Rajada de notificações** para um cliente quando muitos pedidos mudam de uma vez | Média | Baixo | Monitorar. O rate limiting será decidido com dados ([09:38] Diego, [09:39] Larissa). |
-| `PRD-RISK-05` | Cliente receber **eventos do mesmo pedido fora de ordem** | Baixa | Médio | Limitação conhecida e documentada ([09:13] Larissa). Mitigação proposta: o payload traz status anterior e novo, e o cliente reconcilia por eles. |
+| `PRD-RISK-05` | Cliente receber **eventos do mesmo pedido fora de ordem** | Média | Médio | Caso não discutido na reunião, que limitou a ordem a `order_id` com worker único ([09:13] Larissa). Fica documentado como limitação. Mitigação proposta: o payload traz status anterior e novo, e o cliente reconcilia por eles. |
 | `PRD-RISK-06` | Indisponibilidade do cliente **maior que ~14,6 h** | Baixa | Médio | Os eventos ficam na DLQ e um ADMIN os reprocessa ([09:17] Marcos, [09:18] Diego). |
 
 ## 11. Critérios de aceitação

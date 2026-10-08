@@ -14,7 +14,7 @@ Distribuição: ver a tabela [Resumo](#resumo) no fim.
 |---|---|---|---|---|---|
 | PRD-PROB-01 | `docs/PRD.md` | Problema | Três clientes B2B (Atlas, MaxDistribuição, Nova Cargo) pediram formalmente notificação quando o status dos pedidos muda. | TRANSCRICAO | [09:00] Marcos |
 | PRD-PROB-02 | `docs/PRD.md` | Problema | Clientes consultam GET /orders periodicamente, deixando a integração lenta e cara para eles. | TRANSCRICAO | [09:00] Marcos |
-| PRD-PROB-03 | `docs/PRD.md` | Risco | Risco comercial: Atlas pode migrar para concorrente se não houver entrega até o fim do trimestre. | TRANSCRICAO | [09:00] Marcos |
+| PRD-PROB-03 | `docs/PRD.md` | Problema | Risco comercial: Atlas pode migrar para concorrente se não houver entrega até o fim do trimestre. | TRANSCRICAO | [09:00] Marcos |
 | PRD-CEN-01 | `docs/PRD.md` | Cenário | Cliente cadastra endpoint filtrando só SHIPPED e DELIVERED e deixa de fazer polling em GET /orders. | TRANSCRICAO | [09:33] Marcos |
 | PRD-CEN-02 | `docs/PRD.md` | Cenário | Usuário que representa o cliente cadastra URL, guarda a secret e consulta histórico de entregas com payload, resposta e tempo. | TRANSCRICAO | [09:34] Marcos |
 | PRD-CEN-03 | `docs/PRD.md` | Cenário | ADMIN reprocessa eventos da fila de falhas depois que o endpoint do cliente volta de indisponibilidade longa. | TRANSCRICAO | [09:18] Diego |
@@ -65,7 +65,7 @@ Distribuição: ver a tabela [Resumo](#resumo) no fim.
 | PRD-RISK-02 | `docs/PRD.md` | Risco | Cliente processar o mesmo evento duas vezes por não deduplicar; mitigado por X-Event-Id e documentação no portal. | TRANSCRICAO | [09:25] Sofia |
 | PRD-RISK-03 | `docs/PRD.md` | Risco | Vazamento de secret de cliente, como já ocorreu em log; mitigado por secret por endpoint, rotação e revisão. | TRANSCRICAO | [09:22] Diego |
 | PRD-RISK-04 | `docs/PRD.md` | Risco | Rajada de notificações quando muitos pedidos mudam juntos; monitorar e decidir rate limiting com dados. | TRANSCRICAO | [09:38] Diego |
-| PRD-RISK-05 | `docs/PRD.md` | Risco | Eventos do mesmo pedido fora de ordem; limitação documentada, mitigação proposta de reconciliar por status anterior e novo. | TRANSCRICAO | [09:13] Larissa |
+| PRD-RISK-05 | `docs/PRD.md` | Risco | Derivado: eventos do mesmo pedido fora de ordem durante retry (caso não discutido; reunião limitou ordem a order_id e worker único); reconciliar por status. | TRANSCRICAO | [09:13] Larissa |
 | PRD-RISK-06 | `docs/PRD.md` | Risco | Indisponibilidade do cliente maior que cerca de 14,6 h; eventos ficam na DLQ e ADMIN reprocessa. | TRANSCRICAO | [09:17] Marcos |
 | PRD-AC-01 | `docs/PRD.md` | Critério de Aceite | Derivado do filtro e da meta de 10 s: endpoint filtrando SHIPPED recebe POST assinado em menos de 10 s. | TRANSCRICAO | [09:33] Marcos |
 | PRD-AC-02 | `docs/PRD.md` | Critério de Aceite | Derivado do filtro na inserção: pedido indo para PAID fora do filtro não gera notificação. | TRANSCRICAO | [09:34] Bruno |
@@ -107,9 +107,9 @@ Distribuição: ver a tabela [Resumo](#resumo) no fim.
 | RFC-RISK-01 | `docs/RFC.md` | Risco | Derivado: transação de changeStatus fica mais longa ao consultar endpoints e inserir eventos; sem HTTP na transação. | CODIGO | `src/modules/orders/order.service.ts` |
 | RFC-RISK-02 | `docs/RFC.md` | Risco | Outbox cresce sem arquivamento; índices agora e arquivamento como trabalho futuro. | TRANSCRICAO | [09:08] Diego |
 | RFC-RISK-03 | `docs/RFC.md` | Risco | Derivado: worker único como ponto único de vazão, endpoints lentos atrasam outros; ancorado na decisão single-worker. | TRANSCRICAO | [09:12] Diego |
-| RFC-RISK-04 | `docs/RFC.md` | Risco | Ordem por pedido não garantida durante retry; limitação documentada e payload permite reconciliação. | TRANSCRICAO | [09:13] Larissa |
+| RFC-RISK-04 | `docs/RFC.md` | Risco | Derivado: ordem por pedido não garantida durante retry, caso não discutido; limitação registrada em RFC-OQ-07, payload permite reconciliação. | TRANSCRICAO | [09:13] Larissa |
 | RFC-RISK-05 | `docs/RFC.md` | Risco | Proposta: worker parado sem ninguém perceber acumula eventos; alerta sobre idade do pendente mais antigo, ancorado no processo separado. | TRANSCRICAO | [09:11] Diego |
-| FDD-OBJ-01 | `docs/FDD.md` | Objetivo | Toda mudança de status com endpoint interessado gera uma linha de outbox por endpoint na mesma transação; falha da outbox impede a mudança. | TRANSCRICAO | [09:40] Bruno |
+| FDD-OBJ-01 | `docs/FDD.md` | Objetivo | Mudança de status com endpoint interessado gera evento na outbox na mesma transação (Derivado: uma linha por endpoint); falha impede a mudança. | TRANSCRICAO | [09:40] Bruno |
 | FDD-OBJ-02 | `docs/FDD.md` | Objetivo | Primeira tentativa sai em até 2 s após o commit mais o tempo HTTP, abaixo dos 10 s de "tempo real". | TRANSCRICAO | [09:02] Marcos |
 | FDD-OBJ-03 | `docs/FDD.md` | Objetivo | Nenhuma chamada HTTP dentro da transação de pedidos. | TRANSCRICAO | [09:04] Bruno |
 | FDD-OBJ-04 | `docs/FDD.md` | Objetivo | Todo envio é assinado com HMAC-SHA256 e identificável por X-Event-Id e X-Webhook-Id. | TRANSCRICAO | [09:22] Sofia |
@@ -124,24 +124,24 @@ Distribuição: ver a tabela [Resumo](#resumo) no fim.
 | FDD-EXC-07 | `docs/FDD.md` | Fora de Escopo | Items do pedido não entram no payload. | TRANSCRICAO | [09:43] Diego |
 | FDD-EXC-08 | `docs/FDD.md` | Fora de Escopo | Derivado: sem evento na criação do pedido; OrderService.create grava histórico inicial com fromStatus null fora de changeStatus. | CODIGO | `src/modules/orders/order.service.ts` |
 | FDD-EXC-09 | `docs/FDD.md` | Fora de Escopo | Derivado: sem endpoint para listar a DLQ, só o replay foi pedido; ADMIN consulta a tabela webhook_dead_letter. | TRANSCRICAO | [09:18] Diego |
-| FDD-DADOS-01 | `docs/FDD.md` | Modelo de Dados | Outbox com índice em status (composto com nextAttemptAt) e em created_at, para a consulta do worker. | TRANSCRICAO | [09:08] Diego |
-| FDD-DADOS-02 | `docs/FDD.md` | Modelo de Dados | O id da linha da outbox é o event_id UUID; cada endpoint interessado recebe linha e event_id próprios. | TRANSCRICAO | [09:25] Diego |
+| FDD-DADOS-01 | `docs/FDD.md` | Modelo de Dados | Outbox com índice em status e em created_at; Proposta: índice de status composto com nextAttemptAt para a consulta do worker. | TRANSCRICAO | [09:08] Diego |
+| FDD-DADOS-02 | `docs/FDD.md` | Modelo de Dados | O id da linha da outbox é o event_id UUID; Derivado: cada endpoint interessado recebe linha e event_id próprios (filtro na inserção). | TRANSCRICAO | [09:25] Diego |
 | FDD-DADOS-03 | `docs/FDD.md` | Modelo de Dados | Proposta: relações inversas e política de remoção (cascade endpoint/outbox/histórico, DLQ sem FK), ancorada nas convenções do schema Prisma. | CODIGO | `prisma/schema.prisma` |
 | FDD-DADOS-04 | `docs/FDD.md` | Modelo de Dados | Secret em coluna própria, nunca devolvida em leituras; só aparece na criação e rotação. Cifrar em repouso pendente. | TRANSCRICAO | [09:31] Marcos |
 | FDD-FLUXO-01 | `docs/FDD.md` | Fluxo | publishWebhookEvent(tx, order, from, to) dentro da transação filtra endpoints ativos por events e insere uma linha PENDING por endpoint. | TRANSCRICAO | [09:41] Bruno |
-| FDD-FLUXO-02 | `docs/FDD.md` | Fluxo | Worker em src/worker.ts faz polling a cada 2 s, reserva lote PENDING, assina, envia, grava histórico e marca entregue. | TRANSCRICAO | [09:09] Diego |
-| FDD-FLUXO-02a | `docs/FDD.md` | Fluxo | Lote processado em sequência por created_at; tamanho vira WEBHOOK_WORKER_BATCH_SIZE (padrão 10), endpoint lento pode atrasar o lote. | TRANSCRICAO | [09:12] Diego |
-| FDD-FLUXO-02b | `docs/FDD.md` | Fluxo | Recuperação de PROCESSING para PENDING no boot, segura só por haver um único worker; reenvio coberto pelo at-least-once. | TRANSCRICAO | [09:12] Diego |
+| FDD-FLUXO-02 | `docs/FDD.md` | Fluxo | Worker faz polling a cada 2 s, reserva lote PENDING, assina, envia; Proposta: histórico e status gravados na mesma transação. | TRANSCRICAO | [09:09] Diego |
+| FDD-FLUXO-02a | `docs/FDD.md` | Fluxo | Lote processado em sequência por created_at; Proposta: tamanho vira WEBHOOK_WORKER_BATCH_SIZE (padrão 10, a calibrar); endpoint lento atrasa o lote. | TRANSCRICAO | [09:12] Diego |
+| FDD-FLUXO-02b | `docs/FDD.md` | Fluxo | Derivado: recuperação de PROCESSING para PENDING no boot, segura só por haver um único worker; reenvio coberto pelo at-least-once. | TRANSCRICAO | [09:12] Diego |
 | FDD-FLUXO-02c | `docs/FDD.md` | Fluxo | Proposta: shutdown gracioso em SIGINT/SIGTERM com prisma.$disconnect(), no modelo de src/server.ts. | CODIGO | `src/server.ts` |
-| FDD-FLUXO-03 | `docs/FDD.md` | Fluxo | Retry com backoff 1m/5m/30m/2h/12h; após a 6ª falha vai para DLQ com WEBHOOK_MAX_ATTEMPTS_EXCEEDED. | TRANSCRICAO | [09:17] Larissa |
+| FDD-FLUXO-03 | `docs/FDD.md` | Fluxo | Retry 1m/5m/30m/2h/12h; Derivado (leitura 1+5, pendente RFC-OQ-06): após a 6ª falha vai para DLQ com WEBHOOK_MAX_ATTEMPTS_EXCEEDED. | TRANSCRICAO | [09:17] Larissa |
 | FDD-FLUXO-04 | `docs/FDD.md` | Fluxo | Numa transação marca outbox FAILED e cria linha em webhook_dead_letter com payload, motivo e tentativas; loga webhook_dead_lettered. | TRANSCRICAO | [09:18] Diego |
-| FDD-FLUXO-05 | `docs/FDD.md` | Fluxo | Replay ADMIN recoloca a mesma linha da outbox como PENDING com mesmo event_id e registra replayedAt/replayedById. | TRANSCRICAO | [09:18] Diego |
+| FDD-FLUXO-05 | `docs/FDD.md` | Fluxo | Replay ADMIN recoloca o evento na outbox como PENDING; Proposta: mesma linha e mesmo event_id, com replayedAt/replayedById. | TRANSCRICAO | [09:18] Diego |
 | FDD-FLUXO-06 | `docs/FDD.md` | Fluxo | Rotação guarda secret anterior válida 24 h e devolve a nova uma vez; proposta recusar nova rotação durante a carência. | TRANSCRICAO | [09:21] Sofia |
 | FDD-CONTRATO-01 | `docs/FDD.md` | Contrato | POST /api/v1/customers/:customerId/webhooks cria endpoint com url https e events; secret gerada e devolvida só aqui. | TRANSCRICAO | [09:31] Marcos |
 | FDD-CONTRATO-02 | `docs/FDD.md` | Contrato | GET /api/v1/customers/:customerId/webhooks lista paginada dos endpoints do customer, sem secret. | TRANSCRICAO | [09:33] Bruno |
-| FDD-CONTRATO-03 | `docs/FDD.md` | Contrato | PATCH /api/v1/webhooks/:id edita url, events e active; vale para eventos futuros. | TRANSCRICAO | [09:33] Bruno |
-| FDD-CONTRATO-04 | `docs/FDD.md` | Contrato | DELETE /api/v1/webhooks/:id responde 204, remove em cascata pendentes e histórico, preserva a DLQ. | TRANSCRICAO | [09:33] Bruno |
-| FDD-CONTRATO-05 | `docs/FDD.md` | Contrato | POST /api/v1/webhooks/:id/rotate-secret emite nova secret; anterior vale até previousSecretExpiresAt (24 h); 409 se carência ativa. | TRANSCRICAO | [09:21] Sofia |
+| FDD-CONTRATO-03 | `docs/FDD.md` | Contrato | PATCH /api/v1/webhooks/:id edita url, events e active; events vale para inserções futuras, url e active também para pendentes. | TRANSCRICAO | [09:33] Bruno |
+| FDD-CONTRATO-04 | `docs/FDD.md` | Contrato | DELETE /api/v1/webhooks/:id responde 204; Proposta (FDD-DADOS-03): cascata em pendentes e histórico, DLQ preservada. | TRANSCRICAO | [09:33] Bruno |
+| FDD-CONTRATO-05 | `docs/FDD.md` | Contrato | POST /api/v1/webhooks/:id/rotate-secret emite nova secret; anterior vale 24 h; Proposta: 409 se já houver carência ativa. | TRANSCRICAO | [09:21] Sofia |
 | FDD-CONTRATO-06 | `docs/FDD.md` | Contrato | GET /api/v1/webhooks/:id/deliveries lista tentativas decrescentes com sucesso, payload, resposta e duração; pageSize até 100. | TRANSCRICAO | [09:34] Marcos |
 | FDD-CONTRATO-07 | `docs/FDD.md` | Contrato | POST /api/v1/admin/webhooks/dead-letter/:id/replay exige ADMIN, responde 202 e registra quem fez o replay. | TRANSCRICAO | [09:36] Sofia |
 | FDD-CONTRATO-08 | `docs/FDD.md` | Contrato | Chamada de saída POST JSON com X-Event-Id, X-Webhook-Id, X-Timestamp, X-Signature e payload enxuto; 2xx em 10 s é entregue. | TRANSCRICAO | [09:44] Diego |
@@ -153,7 +153,7 @@ Distribuição: ver a tabela [Resumo](#resumo) no fim.
 | FDD-RES-05 | `docs/FDD.md` | Resiliência | Cliente lento nunca afeta a API (outro processo); no worker pode atrasar outros do mesmo lote. | TRANSCRICAO | [09:04] Bruno |
 | FDD-RES-06 | `docs/FDD.md` | Resiliência | Derivado do at-least-once: ao reiniciar, worker devolve PROCESSING para PENDING; reenvio possível é aceito. | TRANSCRICAO | [09:24] Diego |
 | FDD-RES-07 | `docs/FDD.md` | Resiliência | Derivado da outbox: banco indisponível gera log de erro e o loop continua no próximo ciclo; eventos preservados. | TRANSCRICAO | [09:06] Diego |
-| FDD-RES-08 | `docs/FDD.md` | Resiliência | Payload acima de 64 KB não é enviado nem truncado; vai para DLQ com WEBHOOK_PAYLOAD_TOO_LARGE. | TRANSCRICAO | [09:23] Sofia |
+| FDD-RES-08 | `docs/FDD.md` | Resiliência | Payload acima de 64 KB não é enviado nem truncado; Proposta: vai para DLQ com WEBHOOK_PAYLOAD_TOO_LARGE. | TRANSCRICAO | [09:23] Sofia |
 | FDD-RES-09 | `docs/FDD.md` | Resiliência | Falha ao publicar na outbox faz rollback da mudança de status; nunca há status mudado sem evento. | TRANSCRICAO | [09:40] Bruno |
 | FDD-ERR-01 | `docs/FDD.md` | Erro | WEBHOOK_NOT_FOUND 404 para id de endpoint inexistente em PATCH, DELETE, rotate e deliveries. | TRANSCRICAO | [09:28] Bruno |
 | FDD-ERR-02 | `docs/FDD.md` | Erro | Proposta: WEBHOOK_CUSTOMER_NOT_FOUND 404 para customerId inexistente, seguindo o prefixo WEBHOOK_ definido na reunião. | TRANSCRICAO | [09:29] Larissa |
@@ -163,11 +163,11 @@ Distribuição: ver a tabela [Resumo](#resumo) no fim.
 | FDD-ERR-06 | `docs/FDD.md` | Erro | Proposta ancorada no replay: WEBHOOK_DEAD_LETTER_ALREADY_REPLAYED 409 quando replayedAt já está preenchido. | TRANSCRICAO | [09:18] Diego |
 | FDD-ERR-07 | `docs/FDD.md` | Erro | Proposta ancorada no replay: WEBHOOK_ENDPOINT_INACTIVE 409 no replay com endpoint desativado ou removido. | TRANSCRICAO | [09:18] Diego |
 | FDD-ERR-15 | `docs/FDD.md` | Erro | Proposta ancorada na rotação com uma secret anterior: WEBHOOK_SECRET_ROTATION_IN_PROGRESS 409 durante carência ativa. | TRANSCRICAO | [09:21] Sofia |
-| FDD-ERR-08 | `docs/FDD.md` | Erro | WEBHOOK_DELIVERY_TIMEOUT, retentável, sem resposta em 10 s; segue backoff. | TRANSCRICAO | [09:42] Diego |
+| FDD-ERR-08 | `docs/FDD.md` | Erro | Derivado do timeout de 10 s: WEBHOOK_DELIVERY_TIMEOUT, retentável, quando não há resposta em 10 s; segue backoff. | TRANSCRICAO | [09:42] Diego |
 | FDD-ERR-09 | `docs/FDD.md` | Erro | Derivado do retry com backoff: WEBHOOK_DELIVERY_HTTP_ERROR retentável para resposta não 2xx. | TRANSCRICAO | [09:15] Diego |
 | FDD-ERR-10 | `docs/FDD.md` | Erro | Derivado do retry com backoff: WEBHOOK_DELIVERY_NETWORK_ERROR retentável para DNS, conexão recusada ou falha TLS. | TRANSCRICAO | [09:15] Diego |
-| FDD-ERR-11 | `docs/FDD.md` | Erro | WEBHOOK_MAX_ATTEMPTS_EXCEEDED quando o 6º envio falha; destino DLQ. | TRANSCRICAO | [09:17] Larissa |
-| FDD-ERR-12 | `docs/FDD.md` | Erro | WEBHOOK_PAYLOAD_TOO_LARGE não retentável para corpo acima de 65.536 bytes; DLQ direto. | TRANSCRICAO | [09:24] Larissa |
+| FDD-ERR-11 | `docs/FDD.md` | Erro | Derivado (leitura 1+5, RFC-OQ-06): WEBHOOK_MAX_ATTEMPTS_EXCEEDED quando o 6º envio falha; destino DLQ. | TRANSCRICAO | [09:17] Larissa |
+| FDD-ERR-12 | `docs/FDD.md` | Erro | Derivado do limite de 64 KB: WEBHOOK_PAYLOAD_TOO_LARGE, não retentável, corpo acima de 65.536 bytes; DLQ direto. | TRANSCRICAO | [09:24] Larissa |
 | FDD-ERR-13 | `docs/FDD.md` | Erro | Derivado do estado ativo do endpoint: WEBHOOK_ENDPOINT_INACTIVE não retentável quando desativado após inserção; DLQ direto. | TRANSCRICAO | [09:21] Bruno |
 | FDD-ERR-14 | `docs/FDD.md` | Erro | WEBHOOK_SECRET_REQUIRED não retentável, defensivo, para endpoint sem secret ao assinar; DLQ direto. | TRANSCRICAO | [09:28] Bruno |
 | FDD-OBS-01 | `docs/FDD.md` | Observabilidade | Logs JSON estruturados via Pino existente, eventos snake_case, logger.child no worker, redação de secret, nada logado na transação. | TRANSCRICAO | [09:29] Bruno |
@@ -191,27 +191,27 @@ Distribuição: ver a tabela [Resumo](#resumo) no fim.
 | FDD-INT-16 | `docs/FDD.md` | Integração | beforeEach apaga tabelas webhook antes das demais por FKs; factories ganham createTestWebhook. | CODIGO | `tests/setup.ts` |
 | FDD-INT-17 | `docs/FDD.md` | Integração | Sem alteração; delete de customer continua funcionando com webhooks graças ao cascade de FDD-DADOS-03. | CODIGO | `src/modules/customers/customer.service.ts` |
 | FDD-INT-18 | `docs/FDD.md` | Integração | Sem alteração; contrato de PATCH /orders/:id/status mantido, detalhes via GET /orders/:id. | CODIGO | `src/modules/orders/order.routes.ts` |
-| FDD-AC-01 | `docs/FDD.md` | Critério de Aceite | PATCH de status com endpoint ativo e filtro casando cria exatamente uma linha PENDING por endpoint com payload do §6.8. | TRANSCRICAO | [09:06] Diego |
+| FDD-AC-01 | `docs/FDD.md` | Critério de Aceite | PATCH de status com endpoint ativo e filtro casando cria exatamente uma linha PENDING por endpoint com payload do §6.8. | TRANSCRICAO | [09:34] Bruno |
 | FDD-AC-02 | `docs/FDD.md` | Critério de Aceite | Se webhookOutbox.create lança, status, histórico e estoque ficam inalterados. | TRANSCRICAO | [09:40] Bruno |
 | FDD-AC-03 | `docs/FDD.md` | Critério de Aceite | Customer sem endpoint ou com filtro sem o status: nenhuma linha inserida. | TRANSCRICAO | [09:34] Bruno |
 | FDD-AC-04 | `docs/FDD.md` | Critério de Aceite | Criação com http:// responde 400 com WEBHOOK_INVALID_URL; com https 201 com secret; GET nunca devolve secret. | TRANSCRICAO | [09:23] Sofia |
 | FDD-AC-05 | `docs/FDD.md` | Critério de Aceite | Worker entrega com Content-Type, X-Event-Id, X-Webhook-Id, X-Timestamp, X-Signature, e o HMAC-SHA256 confere. | TRANSCRICAO | [09:44] Diego |
-| FDD-AC-06 | `docs/FDD.md` | Critério de Aceite | Servidor com mais de 10 s gera timeout; falhas seguem 1m/5m/30m/2h/12h e na 6ª vira FAILED com DLQ. | TRANSCRICAO | [09:17] Larissa |
+| FDD-AC-06 | `docs/FDD.md` | Critério de Aceite | Servidor acima de 10 s gera timeout; falhas seguem 1m/5m/30m/2h/12h; Derivado (leitura 1+5): na 6ª vira FAILED com DLQ. | TRANSCRICAO | [09:17] Larissa |
 | FDD-AC-07 | `docs/FDD.md` | Critério de Aceite | Payload acima de 65.536 bytes vai para DLQ com WEBHOOK_PAYLOAD_TOO_LARGE sem chamada HTTP. | TRANSCRICAO | [09:24] Larissa |
-| FDD-AC-08 | `docs/FDD.md` | Critério de Aceite | Replay com OPERATOR 403; com ADMIN 202, mesma linha volta PENDING, replayedById e log com userId; segundo replay 409. | TRANSCRICAO | [09:36] Sofia |
-| FDD-AC-09 | `docs/FDD.md` | Critério de Aceite | Após rotate-secret, envios por 24 h trazem duas assinaturas, depois uma; segunda rotação na carência 409. | TRANSCRICAO | [09:21] Sofia |
-| FDD-AC-10 | `docs/FDD.md` | Critério de Aceite | GET deliveries lista tentativas decrescentes com success, responseStatus, durationMs e payload; pageSize acima de 100 dá 400. | TRANSCRICAO | [09:34] Marcos |
+| FDD-AC-08 | `docs/FDD.md` | Critério de Aceite | Replay com OPERATOR 403; ADMIN 202 com replayedById e log com userId; Proposta: mesma linha volta PENDING e segundo replay dá 409. | TRANSCRICAO | [09:36] Sofia |
+| FDD-AC-09 | `docs/FDD.md` | Critério de Aceite | Proposta: após rotate-secret, envios por 24 h trazem duas assinaturas, depois uma; segunda rotação na carência responde 409. | TRANSCRICAO | [09:21] Sofia |
+| FDD-AC-10 | `docs/FDD.md` | Critério de Aceite | GET deliveries lista tentativas decrescentes com success, responseStatus, durationMs e payload; Proposta: pageSize acima de 100 dá 400. | TRANSCRICAO | [09:34] Marcos |
 | FDD-AC-11 | `docs/FDD.md` | Critério de Aceite | Com worker parado a API segue mudando status; ao subir, worker entrega o backlog em ordem de created_at. | TRANSCRICAO | [09:11] Diego |
 | FDD-AC-12 | `docs/FDD.md` | Critério de Aceite | Nenhum log contém valor de secret ou previousSecret. | TRANSCRICAO | [09:22] Diego |
 | FDD-AC-13 | `docs/FDD.md` | Critério de Aceite | Derivado do delete de customer existente: DELETE de customer sem pedidos e com webhook responde 204 e DLQ permanece. | CODIGO | `src/modules/customers/customer.service.ts` |
 | FDD-AC-14 | `docs/FDD.md` | Critério de Aceite | Derivado dos scripts do projeto: lint, build e test passam, incluindo tests/orders.test.ts sem alterar asserts. | CODIGO | `package.json` |
-| FDD-RISK-01 | `docs/FDD.md` | Risco | Ordem por pedido quebrada quando um evento entra em backoff e o seguinte é entregue; decisão em RFC-OQ-07. | TRANSCRICAO | [09:12] Diego |
+| FDD-RISK-01 | `docs/FDD.md` | Risco | Derivado: ordem por pedido quebrada quando um evento entra em backoff e o seguinte é entregue; caso não discutido, decisão em RFC-OQ-07. | TRANSCRICAO | [09:12] Diego |
 | FDD-RISK-02 | `docs/FDD.md` | Risco | Reenvio duplicado por queda ou timeout; mitigado por at-least-once com X-Event-Id estável. | TRANSCRICAO | [09:24] Diego |
 | FDD-RISK-03 | `docs/FDD.md` | Risco | Derivado do worker em processo separado: worker parado sem ninguém perceber; alerta de lag acima de 10 s. | TRANSCRICAO | [09:11] Diego |
-| FDD-RISK-04 | `docs/FDD.md` | Risco | Secret em claro no banco por exigência do HMAC; cifrar em repouso fica para a revisão da Sofia. | TRANSCRICAO | [09:46] Sofia |
-| FDD-RISK-05 | `docs/FDD.md` | Risco | X-Timestamp fora da assinatura permite replay de corpo capturado; mitigado por TLS e dedup por X-Event-Id. | TRANSCRICAO | [09:44] Diego |
-| FDD-RISK-06 | `docs/FDD.md` | Risco | Contenção na transação de changeStatus pelos INSERTs na outbox; consulta indexada e monitorar duração do PATCH. | TRANSCRICAO | [09:04] Bruno |
-| FDD-RISK-07 | `docs/FDD.md` | Risco | Rajada de envios para um cliente sem rate limiting; worker único limita concorrência a 1, observar e decidir. | TRANSCRICAO | [09:38] Diego |
+| FDD-RISK-04 | `docs/FDD.md` | Risco | Derivado: secret em claro no banco por exigência do HMAC; cifrar em repouso fica para a revisão da Sofia. | TRANSCRICAO | [09:46] Sofia |
+| FDD-RISK-05 | `docs/FDD.md` | Risco | Derivado: X-Timestamp fora da assinatura permite replay de corpo capturado; mitigado por TLS e dedup por X-Event-Id. | TRANSCRICAO | [09:44] Diego |
+| FDD-RISK-06 | `docs/FDD.md` | Risco | Derivado: contenção na transação de changeStatus pelos INSERTs na outbox; consulta indexada e monitorar duração do PATCH. | CODIGO | `src/modules/orders/order.service.ts` |
+| FDD-RISK-07 | `docs/FDD.md` | Risco | Rajada de envios sem rate limiting; Derivado: worker único limita concorrência a 1; observar e decidir depois. | TRANSCRICAO | [09:38] Diego |
 | FDD-RISK-09 | `docs/FDD.md` | Risco | Derivado do envio sequencial: head-of-line blocking de endpoints lentos atrasa clientes saudáveis além dos 10 s. | TRANSCRICAO | [09:02] Marcos |
 | FDD-RISK-08 | `docs/FDD.md` | Risco | Qualquer usuário autenticado gerencia webhooks de qualquer customer; endurecimento previsto para depois. | TRANSCRICAO | [09:37] Sofia |
 | ADR-001 | `docs/adrs/ADR-001-outbox-no-mysql.md` | Decisão | Adotar padrão Transactional Outbox no MySQL existente para eventos de mudança de status, sem infraestrutura nova. | TRANSCRICAO | [09:08] Larissa |
@@ -219,7 +219,7 @@ Distribuição: ver a tabela [Resumo](#resumo) no fim.
 | ADR-001-D2 | `docs/adrs/ADR-001-outbox-no-mysql.md` | Decisão | Se a inserção na outbox falhar, a transação inteira faz rollback e o status do pedido não muda. | TRANSCRICAO | [09:40] Bruno |
 | ADR-001-D3 | `docs/adrs/ADR-001-outbox-no-mysql.md` | Decisão | Outbox com índices em status e created_at; status PENDING, PROCESSING, FAILED, DELIVERED. | TRANSCRICAO | [09:08] Diego |
 | ADR-001-D4 | `docs/adrs/ADR-001-outbox-no-mysql.md` | Decisão | Id da linha da outbox é UUID, seguindo o padrão do schema do projeto. | TRANSCRICAO | [09:51] Larissa |
-| ADR-001-ALT-01 | `docs/adrs/ADR-001-outbox-no-mysql.md` | Alternativa Descartada | Disparo HTTP síncrono dentro de changeStatus: travaria outras mudanças de status e não faz sentido rollback se cliente cair. | TRANSCRICAO | [09:06] Diego |
+| ADR-001-ALT-01 | `docs/adrs/ADR-001-outbox-no-mysql.md` | Alternativa Descartada | Disparo HTTP síncrono dentro de changeStatus: travaria outras mudanças de status e não faz sentido rollback se cliente cair. | TRANSCRICAO | [09:04] Bruno |
 | ADR-001-ALT-02 | `docs/adrs/ADR-001-outbox-no-mysql.md` | Alternativa Descartada | Redis Streams ou fila externa: exigiria infraestrutura nova, overengineering para time pequeno. | TRANSCRICAO | [09:07] Diego |
 | ADR-001-CONS-01 | `docs/adrs/ADR-001-outbox-no-mysql.md` | Consequência | Atomicidade: transação commitada implica evento registrado; rollback descarta o evento junto. | TRANSCRICAO | [09:06] Diego |
 | ADR-001-CONS-02 | `docs/adrs/ADR-001-outbox-no-mysql.md` | Consequência | Derivado: transação de changeStatus ganha consulta de endpoints e INSERT por endpoint, aumentando latência do PATCH de status; ancorado na transação existente. | CODIGO | `src/modules/orders/order.service.ts` |
@@ -302,8 +302,8 @@ Distribuição: ver a tabela [Resumo](#resumo) no fim.
 |---|---|---|---|
 | `docs/PRD.md` | 69 | 68 | 1 |
 | `docs/RFC.md` | 28 | 26 | 2 |
-| `docs/FDD.md` | 105 | 81 | 24 |
+| `docs/FDD.md` | 105 | 80 | 25 |
 | `docs/adrs/ADR-*.md` | 81 | 76 | 5 |
-| **Total** | **283** | **251 (89%)** | **32** |
+| **Total** | **283** | **250 (88%)** | **33** |
 
 Todos os IDs citados nos documentos têm linha aqui, uma cobertura de 100%. Cada `[hh:mm] Nome` foi conferido contra a transcrição, e cada caminho de `CODIGO` existe no repositório.

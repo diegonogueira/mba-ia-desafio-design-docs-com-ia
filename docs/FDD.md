@@ -3,7 +3,7 @@
 | Campo | Valor |
 |---|---|
 | **Feature** | Webhooks de saída para mudanças de status de pedido |
-| **Status** | Pronto para implementação, com pendências: contagem de envios (`RFC-OQ-06`), ordem durante o retry (`RFC-OQ-07`) e pontos de segurança (`RFC-OQ-08`) |
+| **Status** | Em revisão: sessão com Bruno e Diego antes de começar a codar ([09:50] Larissa). Pendências: contagem de envios (`RFC-OQ-06`), ordem durante o retry (`RFC-OQ-07`) e pontos de segurança (`RFC-OQ-08`) |
 | **Data** | 2026-10-08 |
 | **Base** | [RFC-001](RFC.md) e [ADR-001 a ADR-007](adrs/README.md) |
 | **Leitores-alvo** | Bruno e Diego (implementação), Sofia (revisão de segurança), Larissa (aprovação) |
@@ -186,9 +186,9 @@ sequenceDiagram
 1. `publishWebhookEvent(tx: Prisma.TransactionClient, order: Order, fromStatus: OrderStatus, toStatus: OrderStatus): Promise<void>` mora em `src/modules/webhooks/webhook.publisher.ts` **(novo)** ([09:41] Bruno).
 2. Busca os endpoints com `customerId = order.customerId` e `active = true`. O filtro por `events` contendo `toStatus` é aplicado em memória, porque a lista por customer é pequena.
 3. Se nenhum endpoint casou, **nada é inserido** ([09:34] Bruno).
-4. Para cada endpoint, grava uma linha. Uma linha por endpoint é derivação do filtro por endpoint ([09:34] Bruno). Gera `eventId = uuidv4()` (pacote `uuid`, já declarado em `package.json`) e renderiza o snapshot (§6.8). Depois chama `tx.webhookOutbox.create` com `id: eventId`, `status: PENDING`, `attempts: 0` e `nextAttemptAt: now`.
+4. Para cada endpoint, grava uma linha. Uma linha por endpoint é derivação do filtro por endpoint ([09:34] Bruno). Gera `eventId = uuidv4()` (pacote `uuid`, já declarado em `package.json`) e renderiza o snapshot (§6.8). O `timestamp` do payload é `new Date().toISOString()`, calculado uma vez por chamada e igual para todos os endpoints. Depois chama `tx.webhookOutbox.create` com `id: eventId`, `status: PENDING`, `attempts: 0` e `nextAttemptAt: now`.
 5. Qualquer exceção propaga, e o `$transaction` faz rollback de tudo: status, histórico, estoque e outbox ([09:40] Bruno). O `errorMiddleware` traduz o erro como já faz hoje: falha de banco não mapeada sai como `500 INTERNAL_SERVER_ERROR`, com log `Unhandled error in request`.
-6. Nada é logado dentro da transação. Um log ali registraria eventos que podem sofrer rollback. A evidência do enfileiramento é a própria linha da outbox, e o worker loga quando a reserva (§5.2).
+6. Nada é logado dentro da transação. Um log ali registraria eventos que podem sofrer rollback. A evidência do enfileiramento é a própria linha da outbox, e o worker loga `webhook_event_claimed` quando reserva o evento (§5.2).
 7. O payload **não** é validado contra o limite de 64 KB aqui. Essa checagem acontece no envio (§5.2). Se acontecesse aqui, um payload inválido bloquearia a mudança de status.
 
 ### 5.2 `FDD-FLUXO-02` — Processamento pelo worker
@@ -197,8 +197,8 @@ Processo: `src/worker.ts` **(novo)**, iniciado por `npm run worker` ([09:11] Lar
 
 ```
 boot:
+  recoveredProcessing = UPDATE webhook_outbox SET status=PENDING WHERE status=PROCESSING   -- single-worker (ADR-002)
   logger.info({pollIntervalMs, batchSize, recoveredProcessing}, 'webhook_worker_started')
-  recover: UPDATE webhook_outbox SET status=PENDING WHERE status=PROCESSING   -- single-worker (ADR-002)
 loop a cada WEBHOOK_POLL_INTERVAL_MS (2000):
   lote = SELECT ... WHERE status=PENDING AND next_attempt_at <= now()
          ORDER BY created_at ASC LIMIT WEBHOOK_WORKER_BATCH_SIZE
@@ -206,15 +206,21 @@ loop a cada WEBHOOK_POLL_INTERVAL_MS (2000):
   logger.info({eventId, webhookId, orderId, attempt}, 'webhook_event_claimed')   -- por evento
   para cada evento do lote, em sequência (preserva created_at):
      endpoint = carregar(evento.webhookEndpointId)
-     se endpoint inativo            -> DLQ(WEBHOOK_ENDPOINT_INACTIVE)  ; próximo
-     se endpoint sem secret         -> DLQ(WEBHOOK_SECRET_REQUIRED)    ; próximo
+     se endpoint inativo            -> falhaSemEnvio(WEBHOOK_ENDPOINT_INACTIVE) ; próximo
+     se endpoint sem secret         -> falhaSemEnvio(WEBHOOK_SECRET_REQUIRED)   ; próximo
      body = JSON.stringify(evento.payload)
-     se bytes(body) > 65536         -> DLQ(WEBHOOK_PAYLOAD_TOO_LARGE)  ; próximo   ([09:24] Larissa)
+     se bytes(body) > 65536         -> falhaSemEnvio(WEBHOOK_PAYLOAD_TOO_LARGE) ; próximo   ([09:24] Larissa)
      headers = assinar(body, endpoint)                                 (§6.9)
      resposta = fetch(url, POST, body, headers, timeout 10s, redirect: 'manual')
-     gravar webhook_deliveries (attemptNumber = attempts+1, status, corpo, durationMs, errorCode)
-     se 2xx -> status=DELIVERED, deliveredAt=now
-     senão  -> FDD-FLUXO-03
+     em UMA transação:
+        criar webhook_deliveries (attemptNumber = attempts+1, success, responseStatus, corpo, durationMs, errorCode)
+        se 2xx -> outbox: status=DELIVERED, deliveredAt=now
+        senão  -> FDD-FLUXO-03 (PENDING + backoff, ou FDD-FLUXO-04 se esgotou)
+     se a transação lançar P2025 (linha da outbox apagada pelo DELETE do endpoint durante o envio):
+        logger.warn({eventId, webhookId}, 'webhook_event_vanished') ; próximo   -- nada a reenviar
+
+  falhaSemEnvio(code): em UMA transação, cria webhook_deliveries (success=false, responseStatus=null,
+                       durationMs=0, errorCode=code) e executa FDD-FLUXO-04 com reason=code
   logger.info({claimed, delivered, retried, deadLettered, cycleMs}, 'webhook_worker_cycle')
 ```
 
@@ -252,15 +258,15 @@ Os motivos que vão direto para a DLQ, sem retry, são `WEBHOOK_PAYLOAD_TOO_LARG
 
 Rota: `POST /api/v1/admin/webhooks/dead-letter/:id/replay`, com `authenticate` e `requireRole('ADMIN')` ([09:36] Larissa). Tudo acontece numa transação:
 
-1. Carrega a linha da DLQ (dentro da transação, passos 1 a 4). Se não existe, responde 404 `WEBHOOK_DEAD_LETTER_NOT_FOUND`. Se `replayedAt` já está preenchido, responde 409 `WEBHOOK_DEAD_LETTER_ALREADY_REPLAYED`.
+1. Carrega a linha da DLQ (dentro da transação, passos 1 a 4). Se não existe, responde 404 `WEBHOOK_DEAD_LETTER_NOT_FOUND`. Para não haver corrida entre dois replays simultâneos (um `SELECT` sob REPEATABLE READ não trava a linha), a marcação é condicional: `webhookDeadLetter.updateMany({ where: { id, replayedAt: null }, data: { replayedAt: now, replayedById: req.user.id } })`. Se `count === 0`, responde 409 `WEBHOOK_DEAD_LETTER_ALREADY_REPLAYED`.
 2. Se o endpoint está inativo ou foi removido (a linha da outbox não existe mais), responde 409 `WEBHOOK_ENDPOINT_INACTIVE`, porque não há para onde reenviar.
 3. Executa `webhookOutbox.update({status: PENDING, attempts: 0, nextAttemptAt: now, lastError: null})`. **É a mesma linha**, com o mesmo `event_id`, e por isso o cliente consegue deduplicar ([09:18] Diego, [ADR-005](adrs/ADR-005-at-least-once-com-x-event-id.md)).
-4. Executa `webhookDeadLetter.update({replayedAt: now, replayedById: req.user.id})`.
+4. A marcação `replayedAt`/`replayedById` já foi feita no passo 1. Se o passo 2 ou o 3 falhar, ela é desfeita com o rollback.
 5. Depois do commit, registra `logger.info({deadLetterId, eventId, webhookId, userId}, 'webhook_dead_letter_replayed')`. É o log de auditoria de quem fez o replay ([09:36] Sofia). O `replayedById` persistido no passo 4 também guarda essa informação.
 
 ### 5.6 `FDD-FLUXO-06` — Rotação de secret
 
-Rota: `POST /api/v1/webhooks/:id/rotate-secret` ([09:21] Sofia). Numa transação, executa `previousSecret = secret`, `previousSecretExpiresAt = now + 24h` e `secret = novaSecret`. A nova secret é devolvida uma única vez. Proposta deste FDD, a validar com a Sofia: **uma nova rotação é recusada enquanto a carência anterior estiver ativa** (409 `WEBHOOK_SECRET_ROTATION_IN_PROGRESS`). O motivo é que só se guarda uma secret anterior, e aceitar a rotação invalidaria essa secret antes das 24 h prometidas ([09:21] Sofia).
+Rota: `POST /api/v1/webhooks/:id/rotate-secret` ([09:21] Sofia). Numa transação, executa `previousSecret = secret`, `previousSecretExpiresAt = now + 24h` e `secret = novaSecret`. A nova secret é devolvida uma única vez. Proposta deste FDD, a validar com a Sofia: **uma nova rotação é recusada enquanto a carência anterior estiver ativa** (409 `WEBHOOK_SECRET_ROTATION_IN_PROGRESS`). O motivo é que só se guarda uma secret anterior, e aceitar a rotação invalidaria essa secret antes das 24 h prometidas ([09:21] Sofia). O update é condicional para não haver corrida: `updateMany({ where: { id, OR: [{ previousSecretExpiresAt: null }, { previousSecretExpiresAt: { lt: now } }] }, ... })`, e `count === 0` responde 409. Efeito colateral a pesar na revisão (`RFC-OQ-08`): se a secret **nova** vazar durante a carência, o cliente fica até 24 h sem poder rotacionar de novo. Depois do commit: `logger.info({webhookId, userId}, 'webhook_secret_rotated')`.
 
 A geração da secret usa `crypto.randomBytes(32).toString('hex')` (módulo nativo do Node). Ela passa pela revisão da Sofia ([09:46] Sofia).
 
@@ -273,6 +279,8 @@ Convenções herdadas do código:
 - Corpo JSON.
 - Erros no envelope `{"error": {"code", "message", "details?"}}` (`src/middlewares/error.middleware.ts`).
 - Listas no formato `{"data": [...], "pagination": {...}}` (`src/shared/http/response.ts`).
+- Todo parâmetro de path (`:id`, `:customerId`) é validado como UUID, como em `customerIdParamSchema` (`src/modules/customers/customer.schemas.ts`). Um valor inválido responde `400 VALIDATION_ERROR` em todos os contratos abaixo.
+- Não há restrição de unicidade de URL: o mesmo customer pode cadastrar a mesma URL mais de uma vez, por exemplo com filtros diferentes. A reunião não pediu unicidade.
 
 O `customerId` vai **no path** na criação e na listagem (`/api/v1/customers/:customerId/webhooks`). A reunião permitiu body ou path ([09:32] Larissa). Escolhemos path porque a listagem "os webhooks de um customer" ([09:33] Bruno) é um GET, que não tem body. As demais operações usam `/api/v1/webhooks/:id`, no formato citado na reunião para o histórico ([09:34] Marcos). O `customerId` **não vem do JWT**, que identifica o operador, não o cliente ([09:32] Bruno).
 
@@ -380,7 +388,10 @@ HTTP/1.1 200 OK
 }
 ```
 
-Campos editáveis: `url`, `events` e `active`. `customerId` e `secret` não são editáveis por aqui. A mudança vale **para eventos futuros** ([ADR-007](adrs/ADR-007-snapshot-do-payload-e-filtro-na-insercao.md)).
+Campos editáveis: `url`, `events` e `active`. `customerId` e `secret` não são editáveis por aqui. Body vazio (`{}`) responde 400, pela regra `refine` de "ao menos um campo". O efeito depende do campo:
+
+- `events` vale só para **inserções futuras**, porque o filtro é aplicado na inserção ([ADR-007](adrs/ADR-007-snapshot-do-payload-e-filtro-na-insercao.md)). Eventos já gravados continuam na outbox.
+- `url` e `active` são lidos pelo worker **no envio** (§5.2), então valem também para os eventos pendentes. Com `active=false`, cada pendente vai para a DLQ com `WEBHOOK_ENDPOINT_INACTIVE` no próximo ciclo. Depois de reativar o endpoint, um ADMIN pode reprocessá-los (§5.5).
 
 | Status | Quando |
 |---|---|
@@ -576,7 +587,7 @@ Observação de implementação: `NotFoundError` fixa o código `NOT_FOUND` e n�
 | ID | Código | HTTP | Gatilho | Mensagem |
 |---|---|---|---|---|
 | `FDD-ERR-01` | `WEBHOOK_NOT_FOUND` | 404 | `:id` de endpoint inexistente (PATCH, DELETE, rotate, deliveries) | `Webhook not found` |
-| `FDD-ERR-02` | `WEBHOOK_CUSTOMER_NOT_FOUND` | 404 | `customerId` inexistente no POST | `Customer not found` |
+| `FDD-ERR-02` | `WEBHOOK_CUSTOMER_NOT_FOUND` | 404 | `customerId` inexistente no POST ou no GET de `/customers/:customerId/webhooks` | `Customer not found` |
 | `FDD-ERR-03` | `WEBHOOK_INVALID_URL` | 400 (em `details` de `VALIDATION_ERROR`) | URL inválida ou não `https` (refine do Zod) | `Webhook URL must use https` |
 | `FDD-ERR-04` | `WEBHOOK_INVALID_EVENT_FILTER` | 400 (em `details` de `VALIDATION_ERROR`) | `events` vazio, com `PENDING` ou com status desconhecido | `events must be a non-empty list of PAID, PROCESSING, SHIPPED, DELIVERED, CANCELLED` |
 | `FDD-ERR-05` | `WEBHOOK_DEAD_LETTER_NOT_FOUND` | 404 | `:id` de DLQ inexistente | `Dead letter not found` |
@@ -612,10 +623,12 @@ O projeto não tem biblioteca de métricas nem de tracing (`package.json`), e a 
 | Evento | Nível | Campos |
 |---|---|---|
 | `webhook_event_claimed` | info | `eventId`, `webhookId`, `orderId`, `attempt` |
-| `webhook_worker_started` / `webhook_worker_stopped` | info | `pollIntervalMs`, `batchSize`, `recoveredProcessing` |
+| `webhook_worker_started` | info | `pollIntervalMs`, `batchSize`, `recoveredProcessing` |
+| `webhook_worker_stopped` | info | `signal` |
 | `webhook_worker_cycle` | debug, ou info quando houver trabalho | `claimed`, `delivered`, `retried`, `deadLettered`, `cycleMs` |
 | `webhook_delivery_succeeded` | info | `eventId`, `webhookId`, `attempt`, `statusCode`, `durationMs` |
 | `webhook_delivery_failed` | warn | `eventId`, `webhookId`, `attempt`, `errorCode`, `statusCode?`, `nextAttemptAt` |
+| `webhook_event_vanished` | warn | `eventId`, `webhookId`: a linha da outbox foi apagada pelo DELETE do endpoint durante o envio |
 | `webhook_dead_lettered` | warn | `eventId`, `webhookId`, `reason`, `attempts` |
 | `webhook_dead_letter_replayed` | info | `deadLetterId`, `eventId`, `userId` (auditoria, [09:36] Sofia) |
 | `webhook_secret_rotated` | info | `webhookId`, `userId`. **Nunca** a secret. |
@@ -667,7 +680,7 @@ A redação passa a incluir `'*.secret'` e `'*.previousSecret'` em `redactPaths`
 
 - `src/worker.ts`
 - `src/modules/webhooks/`, com:
-  - `webhook.controller.ts`, `webhook.service.ts`, `webhook.repository.ts`, `webhook.routes.ts` e `webhook.schemas.ts` ([09:27] Bruno);
+  - `webhook.controller.ts`, `webhook.service.ts`, `webhook.repository.ts`, `webhook.routes.ts` (exporta `buildCustomerWebhookRouter` e `buildWebhookRouter`) e `webhook.schemas.ts` ([09:27] Bruno);
   - `webhook.admin.routes.ts`, `webhook.errors.ts`, `webhook.publisher.ts` (`publishWebhookEvent`), `webhook.processor.ts` (laço do worker, [09:28] Bruno) e `webhook.signature.ts` (HMAC);
 - `tests/webhooks.test.ts` e `tests/webhook-processor.test.ts`.
 
@@ -688,7 +701,7 @@ A redação passa a incluir `'*.secret'` e `'*.previousSecret'` em `redactPaths`
 | `FDD-AC-03` | Customer sem endpoint, ou com endpoint cujo filtro não contém o status: nenhuma linha é inserida. |
 | `FDD-AC-04` | `POST /api/v1/customers/:customerId/webhooks` com `http://` responde 400, com `WEBHOOK_INVALID_URL` em `details`. Com `https://`, responde 201 com `secret`. `GET` nunca devolve `secret`. |
 | `FDD-AC-05` | Contra um servidor de teste, o worker entrega com os headers `Content-Type`, `X-Event-Id`, `X-Webhook-Id`, `X-Timestamp` e `X-Signature`. O HMAC-SHA256 do corpo recebido, com a secret do endpoint, bate com o header. |
-| `FDD-AC-06` | Um servidor que demora mais de 10 s gera `WEBHOOK_DELIVERY_TIMEOUT`, com `attempts=1` e `nextAttemptAt ≈ now+1min`. A sequência de falhas segue 1m/5m/30m/2h/12h e, na 6ª falha, a linha fica `FAILED` com registro em `webhook_dead_letter`. |
+| `FDD-AC-06` | Um servidor que demora mais de 10 s gera `WEBHOOK_DELIVERY_TIMEOUT`, com `attempts=1` e `nextAttemptAt ≈ now+1min`. A sequência de falhas segue 1m/5m/30m/2h/12h e, na 6ª falha, a linha fica `FAILED` com registro em `webhook_dead_letter`. O teste chama o processador ciclo a ciclo e adianta `nextAttemptAt` no banco (ou usa fake timers do Vitest), sem esperar as ~14,6 h reais. |
 | `FDD-AC-07` | Payload > 65.536 bytes vai para a DLQ com `WEBHOOK_PAYLOAD_TOO_LARGE`, sem nenhuma chamada HTTP. |
 | `FDD-AC-08` | Replay com OPERATOR responde 403. Com ADMIN, responde 202: a mesma linha da outbox volta a `PENDING` com o mesmo `id`, a DLQ registra `replayedById`, e o log `webhook_dead_letter_replayed` traz o `userId`. Um segundo replay responde 409. |
 | `FDD-AC-09` | Depois de `rotate-secret`, os envios nas 24 h seguintes trazem duas assinaturas, e depois de `previousSecretExpiresAt` só uma. Uma segunda rotação dentro da carência responde 409. |
@@ -702,7 +715,7 @@ A redação passa a incluir `'*.secret'` e `'*.previousSecret'` em `redactPaths`
 
 | ID | Risco técnico | Prob. | Impacto | Mitigação |
 |---|---|---|---|---|
-| `FDD-RISK-01` | Ordem por pedido quebrada quando um evento entra em backoff e o seguinte é entregue ([09:12] Diego) | Média | Médio | Limitação documentada. O payload traz `from_status`, `to_status` e `timestamp` para reconciliação. A decisão sobre bloquear por `order_id` está em `RFC-OQ-07`. |
+| `FDD-RISK-01` | Ordem por pedido quebrada quando um evento entra em backoff e o seguinte é entregue. A ordem por `created_at` com worker único foi dita em [09:12] Diego; o caso do retry é derivação deste pacote. | Média | Médio | Limitação documentada. O payload traz `from_status`, `to_status` e `timestamp` para reconciliação. A decisão sobre bloquear por `order_id` está em `RFC-OQ-07`. |
 | `FDD-RISK-02` | Reenvio duplicado (queda entre o POST e a marcação, timeout com processamento no cliente) | Média | Médio | At-least-once com `X-Event-Id` estável ([ADR-005](adrs/ADR-005-at-least-once-com-x-event-id.md)). |
 | `FDD-RISK-03` | Worker parado sem ninguém perceber | Baixa | Alto | Alerta de lag > 10 s (§9). A outbox retém os eventos sem perda. |
 | `FDD-RISK-04` | Secret em claro no banco (o HMAC exige o valor original) | Média | Alto | Acesso ao banco restrito, redação nos logs e secret nunca devolvida em leitura. Cifrar em repouso é pauta da revisão da Sofia ([09:46] Sofia). |
